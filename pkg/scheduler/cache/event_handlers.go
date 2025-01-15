@@ -864,7 +864,9 @@ func (sc *SchedulerCache) AddPodGroupV1beta1(obj interface{}) {
 		klog.Errorf("Failed to convert podgroup from %T to %T", ss, podgroup)
 		return
 	}
-
+	if podgroup.GetAnnotations() == nil {
+		podgroup.SetAnnotations(map[string]string{})
+	}
 	pg := &schedulingapi.PodGroup{PodGroup: podgroup, Version: schedulingapi.PodGroupVersionV1Beta1}
 	klog.V(4).Infof("Add PodGroup(%s) into cache, spec(%#v)", ss.Name, ss.Spec)
 
@@ -899,7 +901,9 @@ func (sc *SchedulerCache) UpdatePodGroupV1beta1(oldObj, newObj interface{}) {
 		klog.Errorf("Failed to convert podgroup from %T to %T", newSS, podgroup)
 		return
 	}
-
+	if podgroup.GetAnnotations() == nil {
+		podgroup.SetAnnotations(map[string]string{})
+	}
 	pg := &schedulingapi.PodGroup{PodGroup: podgroup, Version: schedulingapi.PodGroupVersionV1Beta1}
 
 	sc.Mutex.Lock()
