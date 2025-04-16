@@ -602,7 +602,7 @@ func (sc *SchedulerCache) AddNode(obj interface{}) {
 
 // UpdateNode update node to scheduler cache
 func (sc *SchedulerCache) UpdateNode(oldObj, newObj interface{}) {
-	_, ok := oldObj.(*v1.Node)
+	oldNode, ok := oldObj.(*v1.Node)
 	if !ok {
 		klog.Errorf("Cannot convert oldObj to *v1.Node: %v", oldObj)
 		return
@@ -613,6 +613,9 @@ func (sc *SchedulerCache) UpdateNode(oldObj, newObj interface{}) {
 		return
 	}
 	sc.nodeQueue.Add(newNode.Name)
+	if !reflect.DeepEqual(oldNode.GetLabels(), newNode.GetLabels()) {
+		sc.hyperNodesQueue.Add(string(hyperNodeEventSourceNode) + "/" + newNode.Name)
+	}
 }
 
 // DeleteNode delete node from scheduler cache
@@ -765,7 +768,7 @@ func (sc *SchedulerCache) triggerUpdateHyperNode(name string) error {
 	sc.HyperNodesInfo.Lock()
 	defer sc.HyperNodesInfo.Unlock()
 
-	leafNodes := sc.HyperNodesInfo.GetRegexSelectorLeafHyperNodes()
+	leafNodes := sc.HyperNodesInfo.GetRegexOrLabelMatchLeafHyperNodes()
 	if len(leafNodes) == 0 {
 		klog.V(3).InfoS("No need to update hyperNode cache when node added or deleted")
 		return nil
@@ -777,7 +780,7 @@ func (sc *SchedulerCache) triggerUpdateHyperNode(name string) error {
 			klog.ErrorS(nil, "Get empty hyperNode", "hyperNodeName", leafNode)
 			continue
 		}
-		match, err := sc.HyperNodesInfo.NodeRegexMatchLeafHyperNode(name, hn.Name)
+		match, err := sc.HyperNodesInfo.NodeRegexOrLabelMatchLeafHyperNode(name, hn.Name)
 		if err != nil {
 			klog.ErrorS(err, "Failed to get node regex match leaf hyperNode", "nodeName", name, "hyperNodeName", hn.Name)
 			continue
