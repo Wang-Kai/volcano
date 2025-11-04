@@ -349,7 +349,25 @@ func (sc *SchedulerCache) updatePod(oldPod, newPod *v1.Pod) error {
 	if err := sc.deleteTask(taskInfo); err != nil {
 		return err
 	}
-	//when delete pod, the ownerreference of pod will be set nil, just as orphan pod
+
+	// update taskInfo by new pod
+	// 1. update taskInfo.Pod pointer, we don't hold oldPod pointer so that oldPod can be GC
+	// 2. update node name for pod bind event
+	// 3. update any other fields relative with annotations
+	// 4. update taskInfo status
+	taskInfo.Pod = newPod
+	taskInfo.NodeName = newPod.Spec.NodeName
+	taskInfo.Preemptable = schedulingapi.GetPodPreemptable(newPod)
+	taskInfo.RevocableZone = schedulingapi.GetPodRevocableZone(newPod)
+	taskInfo.NumaInfo = schedulingapi.GetPodTopologyInfo(newPod)
+	taskInfo.Status = newTaskStatus
+
+	// reuse taskInfo struct and add it to job and node, avoid being recyceld by GC
+	if err := sc.addTask(taskInfo); err != nil {
+		return err
+	}
+
+	//when delete pod, the ownerreference of pod will be set nil,just as orphan pod
 	if len(utils.GetController(newPod)) == 0 {
 		newPod.OwnerReferences = oldPod.OwnerReferences
 	}
