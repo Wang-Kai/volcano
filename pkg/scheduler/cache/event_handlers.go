@@ -69,7 +69,7 @@ func isTerminated(status schedulingapi.TaskStatus) bool {
 func (sc *SchedulerCache) getOrCreateJob(pi *schedulingapi.TaskInfo) *schedulingapi.JobInfo {
 	if len(pi.Job) == 0 {
 		if !slices.Contains(sc.schedulerNames, pi.Pod.Spec.SchedulerName) {
-			klog.V(4).Infof("Pod %s/%s will not scheduled by %s, skip creating PodGroup and Job for it",
+			klog.V(4).Infof("Pod %s/%s is not scheduled by %s, skip creating PodGroup and Job for it in cache.",
 				pi.Pod.Namespace, pi.Pod.Name, strings.Join(sc.schedulerNames, ","))
 		}
 		return nil
@@ -292,7 +292,7 @@ func (sc *SchedulerCache) syncTask(oldTask *schedulingapi.TaskInfo) error {
 
 func (sc *SchedulerCache) updateTask(oldTask, newTask *schedulingapi.TaskInfo) error {
 	if err := sc.deleteTask(oldTask); err != nil {
-		klog.Warningf("Failed to delete task: %v", err)
+		klog.Warningf("Failed to delete task from cache: %v", err)
 	}
 
 	return sc.addTask(newTask)
@@ -349,25 +349,7 @@ func (sc *SchedulerCache) updatePod(oldPod, newPod *v1.Pod) error {
 	if err := sc.deleteTask(taskInfo); err != nil {
 		return err
 	}
-
-	// update taskInfo by new pod
-	// 1. update taskInfo.Pod pointer, we don't hold oldPod pointer so that oldPod can be GC
-	// 2. update node name for pod bind event
-	// 3. update any other fields relative with annotations
-	// 4. update taskInfo status
-	taskInfo.Pod = newPod
-	taskInfo.NodeName = newPod.Spec.NodeName
-	taskInfo.Preemptable = schedulingapi.GetPodPreemptable(newPod)
-	taskInfo.RevocableZone = schedulingapi.GetPodRevocableZone(newPod)
-	taskInfo.NumaInfo = schedulingapi.GetPodTopologyInfo(newPod)
-	taskInfo.Status = newTaskStatus
-
-	// reuse taskInfo struct and add it to job and node, avoid being recyceld by GC
-	if err := sc.addTask(taskInfo); err != nil {
-		return err
-	}
-
-	//when delete pod, the ownerreference of pod will be set nil,just as orphan pod
+	//when delete pod, the ownerreference of pod will be set nil, just as orphan pod
 	if len(utils.GetController(newPod)) == 0 {
 		newPod.OwnerReferences = oldPod.OwnerReferences
 	}
@@ -375,27 +357,33 @@ func (sc *SchedulerCache) updatePod(oldPod, newPod *v1.Pod) error {
 }
 
 func (sc *SchedulerCache) deleteTask(ti *schedulingapi.TaskInfo) error {
-	var jobErr, nodeErr, numaErr error
+	var jobErr, nodeErr error
 
 	if len(ti.Job) != 0 {
 		if job, found := sc.Jobs[ti.Job]; found {
 			jobErr = job.DeleteTaskInfo(ti)
 		} else {
-			klog.Warningf("Failed to find Job <%v> for Task <%v/%v>", ti.Job, ti.Namespace, ti.Name)
+			klog.Warningf("Failed to find Job <%v> for Task <%v/%v> in cache.", ti.Job, ti.Namespace, ti.Name)
 		}
-	} else { // should not run into here; record error so that easy to debug
-		jobErr = fmt.Errorf("task %s/%s has null jobID", ti.Namespace, ti.Name)
+	} else {
+		klog.V(4).Infof("Task <%s/%s> has null jobID in cache.", ti.Namespace, ti.Name)
 	}
 
 	if len(ti.NodeName) != 0 {
-		node := sc.Nodes[ti.NodeName]
-		if node != nil {
-			nodeErr = node.RemoveTask(ti)
+		// We don't need to delete tasks from the Nodes cache that are already terminated.
+		// These tasks will be cleaned up during the UpdatePod -> updatePod -> deletePod -> deleteTask sequence,
+		// and will not be re-added with node.AddTask when updatePod -> addPod -> addTask occurs.
+		// This covers the case when taskStatus changes from Releasing to Failed or Succeeded.
+		if !isTerminated(ti.Status) {
+			node := sc.Nodes[ti.NodeName]
+			if node != nil {
+				nodeErr = node.RemoveTask(ti)
+			}
 		}
 	}
 
 	if jobErr != nil || nodeErr != nil {
-		return schedulingapi.MergeErrors(jobErr, nodeErr, numaErr)
+		return schedulingapi.MergeErrors(jobErr, nodeErr)
 	}
 
 	return nil
@@ -412,8 +400,9 @@ func (sc *SchedulerCache) deletePod(pod *v1.Pod) error {
 			task = t
 		}
 	}
+
 	if err := sc.deleteTask(task); err != nil {
-		klog.Warningf("Failed to delete task: %v", err)
+		klog.Warningf("Failed to delete task from cache: %v", err)
 	}
 
 	// If job was terminated, delete it.
